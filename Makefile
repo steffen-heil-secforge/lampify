@@ -1,12 +1,14 @@
 CC    = gcc
-LIB   = -lbluetooth -lnotify
-INC   = -I /usr/include/glib-2.0 -I /usr/lib/glib-2.0/include -I /usr/include/gdk-pixbuf-2.0
 BASE  = lampify
 INST  = /usr/local/bin/
 CFLAG = -Wall -Ofast
 
+# Use pkg-config for portable include/library paths
+NOTIFY_CFLAGS = $(shell pkg-config --cflags libnotify)
+NOTIFY_LIBS   = $(shell pkg-config --libs libnotify)
+
 all:
-	$(CC) $(CFLAG) $(INC) $(LIB) -o $(BASE) $(BASE).c
+	$(CC) $(CFLAG) $(NOTIFY_CFLAGS) -o $(BASE) $(BASE).c -lbluetooth $(NOTIFY_LIBS)
 
 clean:
 	rm -f $(BASE)
