@@ -8,12 +8,9 @@
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 
-#define VERSION "1.0.0"
-
-char BRIGHTNESS_LEVELS[10] = {
-    0x1A, 0x33, 0x4C, 0x66, 0x7F,
-    0x99, 0xB2, 0xCC, 0xE5, 0xFF
-};
+#define VERSION "1.2.0"
+#define MIN_LEVEL 3
+#define MAX_LEVEL 255
 
 char PACKET_BASE[32] = {
     0x1F, 0x02, 0x01, 0x01, 0x1B, 0x03, 0x71, 0x0F,
@@ -57,7 +54,33 @@ int CRC_TABLE[256] = {
     0x6E17, 0x7E36, 0x4E55, 0x5E74, 0x2E93, 0x3EB2, 0x0ED1, 0x1EF0
 };
 
-char* bitReverse (char* bArr) {
+// Global device ID
+char gDeviceId[1024] = "";
+int gNotify = 0;
+int gSilent = 0;
+
+int clamp(int val, int min, int max) {
+    if (val < min) return min;
+    if (val > max) return max;
+    return val;
+}
+
+void showOutput(const char* message) {
+    if (!gSilent) {
+        fprintf(stdout, "[%s] %s\n", gDeviceId, message);
+    }
+
+    if (gNotify) {
+        notify_init("Lampify");
+        NotifyNotification* ntf = notify_notification_new(message, NULL, NULL);
+        notify_notification_set_timeout(ntf, 5000);
+        if (!notify_notification_show(ntf, NULL)) {
+            fprintf(stderr, "[W] Failed to send notification!\n");
+        }
+    }
+}
+
+char* bitReverse(char* bArr) {
     static char revArr[25];
     for (int i = 0; i < 25; i++) {
         char rev = 0;
@@ -69,7 +92,7 @@ char* bitReverse (char* bArr) {
     return revArr;
 }
 
-char* bleWhitening (char* bArr) {
+char* bleWhitening(char* bArr) {
     static char whArr[38];
     int i2 = 83;
     int i3 = 0;
@@ -91,20 +114,20 @@ char* bleWhitening (char* bArr) {
     return whArr;
 }
 
-char* bleWhiteningForPacket (char* bArr) {
-        char whArr[38];
-        for (int i = 0; i < 25; i++) {
-            whArr[i + 13] = bArr[i];
-        }
-        static char whitenedForPacket[25];
-        char* bleWhitened = bleWhitening(whArr);
-        for (int i = 0; i < 25; i++) {
-            whitenedForPacket[i] = bleWhitened[i + 13];
-        }
-        return whitenedForPacket;
+char* bleWhiteningForPacket(char* bArr) {
+    char whArr[38];
+    for (int i = 0; i < 25; i++) {
+        whArr[i + 13] = bArr[i];
     }
+    static char whitenedForPacket[25];
+    char* bleWhitened = bleWhitening(whArr);
+    for (int i = 0; i < 25; i++) {
+        whitenedForPacket[i] = bleWhitened[i + 13];
+    }
+    return whitenedForPacket;
+}
 
-int CRC16 (char* bArr, int offset) {
+int CRC16(char* bArr, int offset) {
     int crc = 65535;
     for (int i = 0; i < 12; i++) {
         crc = CRC_TABLE[((crc >> 8) ^ bArr[offset + i]) & 255] ^ (crc << 8);
@@ -112,17 +135,15 @@ int CRC16 (char* bArr, int offset) {
     return crc;
 }
 
-char* buildMasterControl () {
-    char hostName[1024] = "";
-    gethostname(hostName, 1024);
-    int crc = CRC16(hostName, 8);
+char* buildMasterControl() {
+    int crc = CRC16(gDeviceId, 0);
     static char masterControl[2];
     masterControl[0] = (crc >> 8) & 255;
     masterControl[1] = crc & 255;
     return masterControl;
 }
 
-char* buildPacket (char command, char arg1, char arg2) {
+char* buildPacket(char command, char arg1, char arg2) {
     char* mControl = buildMasterControl();
     char msgBase[25];
     static char packet[32];
@@ -150,7 +171,7 @@ char* buildPacket (char command, char arg1, char arg2) {
     return packet;
 }
 
-int hciSetParams (int socket, int itv, int timeOut) {
+int hciSetParams(int socket, int itv, int timeOut) {
     unsigned char status;
     struct hci_request req;
     le_set_advertising_parameters_cp params;
@@ -171,7 +192,7 @@ int hciSetParams (int socket, int itv, int timeOut) {
     return 0;
 }
 
-int sendPacket (char* bArr) {
+int sendPacket(char* bArr) {
     int deviceID = hci_get_route(NULL);
     if (deviceID < 0) {
         fprintf(stderr, "[E] Failed to find adapter!\n");
@@ -203,83 +224,93 @@ int sendPacket (char* bArr) {
     return 0;
 }
 
-int decodeCommand (char* mode, char* command, char* arg) {
-    if (!mode || (strcmp(mode, "q") && strcmp(mode, "v"))) {
-        return -1;
-    }
-    char* packet = NULL;
-    char ntfText[128] = "";
-    if (command) {
-        if (!strcmp(command, "setup")) {
-            char* mControl = buildMasterControl();
-            packet = buildPacket(0x28, mControl[0], mControl[1]);
-            sprintf(ntfText, "Connecting to the lamp");
-        }
-        if (!strcmp(command, "on")) {
-            packet = buildPacket(0x10, 0x00, 0x00);
-            sprintf(ntfText, "Turning the lamp on");
-        }
-        if (!strcmp(command, "off")) {
-            packet = buildPacket(0x11, 0x00, 0x00);
-            sprintf(ntfText, "Turning the lamp off");
-        }
-        if (arg) {
-            int index = atoi(arg) % 10;
-            char level = BRIGHTNESS_LEVELS[index];
-            if (!strcmp(command, "cold")) {
-                packet = buildPacket(0x21, level, 0x00);
-                sprintf(ntfText, "Setting cold brightness to %d", index);
-            }
-            if (!strcmp(command, "warm")) {
-                packet = buildPacket(0x21, 0x00, level);
-                sprintf(ntfText, "Setting warm brightness to %d", index);
-            }
-            if (!strcmp(command, "dual")) {
-                packet = buildPacket(0x21, level, level);
-                sprintf(ntfText, "Setting dual brightness to %d", index);
-            }
-        }
-    }
-    if (packet) {
-        if (!strcmp(mode, "v")) {
-            notify_init("Lampify");
-            NotifyNotification* ntf = notify_notification_new(ntfText, NULL, NULL);
-            notify_notification_set_timeout(ntf, 5000);
-            if (!notify_notification_show(ntf, NULL)) {
-                fprintf(stderr, "[W] Failed to send notification!\n");
-            }
-        }
-        fprintf(stdout, "[I] %s\n", ntfText);
-        return sendPacket(packet);
-    }
-    return -1;
-}
-
-void printUsage (char* basename) {
-    fprintf(stderr, "Lampify %s by MasterDevX\n", VERSION);
-    fprintf(stderr, "Made in Ukraine\n\n");
+void printUsage(char* basename) {
+    fprintf(stderr, "Lampify %s\n", VERSION);
+    fprintf(stderr, "Based on Lampify by MasterDevX\n\n");
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "%s <mode> <action> [parameter]\n\n", basename);
-    fprintf(stderr, "Available modes:\n");
-    fprintf(stderr, "q               quiet (without notifications)\n");
-    fprintf(stderr, "v               verbose (with notifications)\n\n");
-    fprintf(stderr, "Available actions:\n");
-    fprintf(stderr, "setup           connect to the lamp\n");
-    fprintf(stderr, "on              turn the lamp on\n");
-    fprintf(stderr, "off             turn the lamp off\n");
-    fprintf(stderr, "cold  <0..9>    set cold brightness\n");
-    fprintf(stderr, "warm  <0..9>    set warm brightness\n");
-    fprintf(stderr, "dual  <0..9>    set dual brightness\n");
+    fprintf(stderr, "  %s [options] <device_id> <command> [args]\n\n", basename);
+    fprintf(stderr, "Options:\n");
+    fprintf(stderr, "  -n, --notify     Show desktop notifications\n");
+    fprintf(stderr, "  -s, --silent     Suppress non-error output\n\n");
+    fprintf(stderr, "Commands:\n");
+    fprintf(stderr, "  setup              Pair with lamp (within 5s of power-on)\n");
+    fprintf(stderr, "  on                 Turn lamp on\n");
+    fprintf(stderr, "  off                Turn lamp off\n");
+    fprintf(stderr, "  set <cold> <warm>  Set light levels (3-255 each)\n\n");
+    fprintf(stderr, "Examples:\n");
+    fprintf(stderr, "  %s lamp1 setup           # Pair with lamp\n", basename);
+    fprintf(stderr, "  %s lamp1 on              # Turn on\n", basename);
+    fprintf(stderr, "  %s lamp1 set 255 255     # Max brightness, neutral\n", basename);
+    fprintf(stderr, "  %s lamp1 set 255 3       # Max brightness, cold\n", basename);
+    fprintf(stderr, "  %s lamp1 set 3 255       # Max brightness, warm\n", basename);
+    fprintf(stderr, "  %s -n lamp1 set 128 128  # 50%% brightness with notification\n", basename);
 }
 
-int main (int argc, char** argv) {
+int main(int argc, char** argv) {
     srand(clock());
-    int ret = decodeCommand(argv[1], argv[2], argv[3]);
-    if (ret != 0) {
-        if (ret < 0){
+
+    int argOffset = 1;
+
+    // Parse options
+    while (argOffset < argc && argv[argOffset][0] == '-') {
+        if (!strcmp(argv[argOffset], "-n") || !strcmp(argv[argOffset], "--notify")) {
+            gNotify = 1;
+            argOffset++;
+        } else if (!strcmp(argv[argOffset], "-s") || !strcmp(argv[argOffset], "--silent")) {
+            gSilent = 1;
+            argOffset++;
+        } else if (!strcmp(argv[argOffset], "-h") || !strcmp(argv[argOffset], "--help")) {
             printUsage(argv[0]);
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown option: %s\n\n", argv[argOffset]);
+            printUsage(argv[0]);
+            return 1;
         }
+    }
+
+    // Need at least device_id and command
+    if (argc - argOffset < 2) {
+        printUsage(argv[0]);
         return 1;
     }
-    return 0;
+
+    // First positional argument is device ID
+    strncpy(gDeviceId, argv[argOffset], sizeof(gDeviceId) - 1);
+    argOffset++;
+
+    char* cmd = argv[argOffset];
+    argOffset++;
+    char* packet = NULL;
+    char ntfText[128] = "";
+
+    if (!strcmp(cmd, "setup")) {
+        char* mControl = buildMasterControl();
+        packet = buildPacket(0x28, mControl[0], mControl[1]);
+        sprintf(ntfText, "Pairing with lamp");
+    }
+    else if (!strcmp(cmd, "on")) {
+        packet = buildPacket(0x10, 0x00, 0x00);
+        sprintf(ntfText, "Turning lamp on");
+    }
+    else if (!strcmp(cmd, "off")) {
+        packet = buildPacket(0x11, 0x00, 0x00);
+        sprintf(ntfText, "Turning lamp off");
+    }
+    else if (!strcmp(cmd, "set") && argc - argOffset >= 2) {
+        int cold = clamp(atoi(argv[argOffset]), MIN_LEVEL, MAX_LEVEL);
+        int warm = clamp(atoi(argv[argOffset + 1]), MIN_LEVEL, MAX_LEVEL);
+        packet = buildPacket(0x21, (char)cold, (char)warm);
+        sprintf(ntfText, "Set cold=%d warm=%d", cold, warm);
+    }
+    else {
+        printUsage(argv[0]);
+        return 1;
+    }
+
+    if (packet) {
+        showOutput(ntfText);
+        return sendPacket(packet);
+    }
+    return 1;
 }
