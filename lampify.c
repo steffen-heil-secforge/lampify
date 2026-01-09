@@ -1,6 +1,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <unistd.h>
 #include <libnotify/notify.h>
@@ -54,8 +55,9 @@ int CRC_TABLE[256] = {
     0x6E17, 0x7E36, 0x4E55, 0x5E74, 0x2E93, 0x3EB2, 0x0ED1, 0x1EF0
 };
 
-// Global device ID
-char gDeviceId[1024] = "";
+// Global device ID (raw uint16)
+uint16_t gDeviceId = 0;
+char gDeviceIdStr[32] = "";
 int gNotify = 0;
 int gSilent = 0;
 
@@ -67,7 +69,7 @@ int clamp(int val, int min, int max) {
 
 void showOutput(const char* message) {
     if (!gSilent) {
-        fprintf(stdout, "[%s] %s\n", gDeviceId, message);
+        fprintf(stdout, "[%s] %s\n", gDeviceIdStr, message);
     }
 
     if (gNotify) {
@@ -115,7 +117,7 @@ char* bleWhitening(char* bArr) {
 }
 
 char* bleWhiteningForPacket(char* bArr) {
-    char whArr[38];
+    char whArr[38] = {0};
     for (int i = 0; i < 25; i++) {
         whArr[i + 13] = bArr[i];
     }
@@ -136,10 +138,9 @@ int CRC16(char* bArr, int offset) {
 }
 
 char* buildMasterControl() {
-    int crc = CRC16(gDeviceId, 0);
     static char masterControl[2];
-    masterControl[0] = (crc >> 8) & 255;
-    masterControl[1] = crc & 255;
+    masterControl[0] = (gDeviceId >> 8) & 255;
+    masterControl[1] = gDeviceId & 255;
     return masterControl;
 }
 
@@ -232,18 +233,21 @@ void printUsage(char* basename) {
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -n, --notify     Show desktop notifications\n");
     fprintf(stderr, "  -s, --silent     Suppress non-error output\n\n");
+    fprintf(stderr, "Device ID:\n");
+    fprintf(stderr, "  Hex value (0x0000-0xFFFF) that identifies the lamp.\n");
+    fprintf(stderr, "  Lamp stores this during pairing and only responds to matching IDs.\n\n");
     fprintf(stderr, "Commands:\n");
     fprintf(stderr, "  setup              Pair with lamp (within 5s of power-on)\n");
     fprintf(stderr, "  on                 Turn lamp on\n");
     fprintf(stderr, "  off                Turn lamp off\n");
     fprintf(stderr, "  set <cold> <warm>  Set light levels (3-255 each)\n\n");
     fprintf(stderr, "Examples:\n");
-    fprintf(stderr, "  %s lamp1 setup           # Pair with lamp\n", basename);
-    fprintf(stderr, "  %s lamp1 on              # Turn on\n", basename);
-    fprintf(stderr, "  %s lamp1 set 255 255     # Max brightness, neutral\n", basename);
-    fprintf(stderr, "  %s lamp1 set 255 3       # Max brightness, cold\n", basename);
-    fprintf(stderr, "  %s lamp1 set 3 255       # Max brightness, warm\n", basename);
-    fprintf(stderr, "  %s -n lamp1 set 128 128  # 50%% brightness with notification\n", basename);
+    fprintf(stderr, "  %s 0x1234 setup         # Pair with lamp using ID 0x1234\n", basename);
+    fprintf(stderr, "  %s 0x1234 on            # Turn on\n", basename);
+    fprintf(stderr, "  %s 0x1234 set 255 255   # Max brightness, neutral\n", basename);
+    fprintf(stderr, "  %s 0x1234 set 255 3     # Max brightness, cold\n", basename);
+    fprintf(stderr, "  %s 0x1234 set 3 255     # Max brightness, warm\n", basename);
+    fprintf(stderr, "  %s -n 0x1234 set 128 128  # 50%% brightness with notification\n", basename);
 }
 
 int main(int argc, char** argv) {
@@ -275,8 +279,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // First positional argument is device ID
-    strncpy(gDeviceId, argv[argOffset], sizeof(gDeviceId) - 1);
+    // First positional argument is device ID (hex)
+    char* endptr;
+    unsigned long parsed = strtoul(argv[argOffset], &endptr, 0);
+    if (*endptr != '\0' || parsed > 0xFFFF) {
+        fprintf(stderr, "Invalid device ID: %s (must be 0x0000-0xFFFF)\n\n", argv[argOffset]);
+        printUsage(argv[0]);
+        return 1;
+    }
+    gDeviceId = (uint16_t)parsed;
+    snprintf(gDeviceIdStr, sizeof(gDeviceIdStr), "0x%04X", gDeviceId);
     argOffset++;
 
     char* cmd = argv[argOffset];
