@@ -60,6 +60,7 @@ uint16_t gDeviceId = 0;
 char gDeviceIdStr[32] = "";
 int gNotify = 0;
 int gSilent = 0;
+int gDebug = 0;
 
 int clamp(int val, int min, int max) {
     if (val < min) return min;
@@ -156,7 +157,7 @@ char* buildPacket(char command, char arg1, char arg2) {
     msgBase[13] = mControl[1];
     msgBase[14] = arg1;
     msgBase[15] = arg2;
-    msgBase[17] = rand() & 255;
+    msgBase[17] = rand() & 255;  // Random byte for each packet
     int crc = CRC16(msgBase, 11);
     msgBase[23] = (crc >> 8) & 255;
     msgBase[24] = crc & 255;
@@ -194,6 +195,13 @@ int hciSetParams(int socket, int itv, int timeOut) {
 }
 
 int sendPacket(char* bArr) {
+    if (gDebug) {
+        fprintf(stderr, "[D] Packet: ");
+        for (int i = 0; i < 32; i++) {
+            fprintf(stderr, "%02X", (unsigned char)bArr[i]);
+        }
+        fprintf(stderr, "\n");
+    }
     int deviceID = hci_get_route(NULL);
     if (deviceID < 0) {
         fprintf(stderr, "[E] Failed to find adapter!\n");
@@ -232,7 +240,8 @@ void printUsage(char* basename) {
     fprintf(stderr, "  %s [options] <device_id> <command> [args]\n\n", basename);
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -n, --notify     Show desktop notifications\n");
-    fprintf(stderr, "  -s, --silent     Suppress non-error output\n\n");
+    fprintf(stderr, "  -s, --silent     Suppress non-error output\n");
+    fprintf(stderr, "  -d, --debug      Print sent packets in hex\n\n");
     fprintf(stderr, "Device ID:\n");
     fprintf(stderr, "  Hex value (0x0000-0xFFFF) that identifies the lamp.\n");
     fprintf(stderr, "  Lamp stores this during pairing and only responds to matching IDs.\n\n");
@@ -262,6 +271,9 @@ int main(int argc, char** argv) {
             argOffset++;
         } else if (!strcmp(argv[argOffset], "-s") || !strcmp(argv[argOffset], "--silent")) {
             gSilent = 1;
+            argOffset++;
+        } else if (!strcmp(argv[argOffset], "-d") || !strcmp(argv[argOffset], "--debug")) {
+            gDebug = 1;
             argOffset++;
         } else if (!strcmp(argv[argOffset], "-h") || !strcmp(argv[argOffset], "--help")) {
             printUsage(argv[0]);
