@@ -1,0 +1,79 @@
+= SYTMHOE LED Wall Lamp — BLE Protocol Reference
+:toc:
+
+== Overview
+
+SYTMHOE LED wall lamps use the **LampSmart Pro** BLE advertising protocol (NOT Bluetooth SIG Mesh). They are controlled via BLE advertisement packets, not connections.
+
+Implementation: ESPHome component at `/source/esphome-sytmhoe/` running on ESP32-C3 boards. Device configs in `esphome/esp32c3-*.yaml`, lamp inventory in `esphome/lamp-inventory.md`.
+
+== Light Control
+
+The lamps accept two bytes: **cold** and **warm** (each 0-255):
+
+* `cold` — amount of cold (blue-ish) light
+* `warm` — amount of warm (yellow-ish) light
+* Total brightness = cold + warm
+* Color temperature = ratio between cold and warm
+
+WARNING: Values below 3 cause lamp failure requiring power cycle!
+
+[cols="3,1,1,2", options="header"]
+|===
+| Setting | Cold | Warm | Result
+
+| Max brightness, neutral | 255 | 255 | Brightest possible
+| Max brightness, cold | 255 | 3 | Full cold light
+| Max brightness, warm | 3 | 255 | Full warm light
+| 50% brightness, neutral | 128 | 128 | Medium neutral
+| Minimum | 3 | 3 | Dimmest possible
+|===
+
+== CRC16 Device ID
+
+The lamp identifies its controller using a CRC16 hash of the device ID string. The CRC16 becomes the 2-byte device ID in BLE packets. Lamps only respond to commands with matching device IDs.
+
+Example: `lamp1` produces CRC16 `0x7E7B`, so only lamps paired with device ID `lamp1` respond.
+
+== LampSmart Pro Protocol Commands
+
+BLE advertising protocol command codes (source: `fanlamp_pro.cpp` in aronsky/esphome-components):
+
+=== Light Commands
+
+[cols="1,1,3", options="header"]
+|===
+| Hex | Command | Description
+
+| 0x10 | Light ON | Turn lamp on
+| 0x11 | Light OFF | Turn lamp off
+| 0x12 | Secondary ON | Turn secondary light on (if present)
+| 0x13 | Secondary OFF | Turn secondary light off (if present)
+| 0x21 | Set Color | Set brightness/color temp (args[0]=cold, args[1]=warm)
+|===
+
+=== System Commands
+
+[cols="1,1,3", options="header"]
+|===
+| Hex | Command | Description
+
+| 0x28 | Pair | Register device (within 5s of power-on)
+| 0x45 | Unpair | Unregister device from lamp
+|===
+
+=== Fan Commands (for lamps with integrated fans)
+
+[cols="1,1,3", options="header"]
+|===
+| Hex | Command | Description
+
+| 0x15 | Direction | Control fan direction
+| 0x16 | Oscillation | Control fan oscillation
+| 0x31 | Speed | Set fan speed/power (standard mode)
+| 0x32 | Speed 6-level | Set fan speed in gear mode (1-6)
+|===
+
+== Sytmhoe Protocol Variant
+
+Some lamps use a different protocol variant (remote_v31 / "sytmhoe" protocol) with step-based brightness/CT control instead of direct cold/warm bytes. The ESPHome component supports both protocols per-lamp via a flash-stored protocol selector. See `esphome/lamp-inventory.md` for which lamp uses which protocol.
