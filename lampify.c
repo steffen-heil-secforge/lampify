@@ -9,8 +9,9 @@
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 
-#define VERSION "1.2.0"
-#define MIN_LEVEL 3
+#define VERSION "1.3.0"
+#define MIN_LEVEL 0
+#define SAFE_LEVEL 3
 #define MAX_LEVEL 255
 
 char PACKET_BASE[32] = {
@@ -324,6 +325,18 @@ int main(int argc, char** argv) {
     else if (!strcmp(cmd, "set") && argc - argOffset >= 2) {
         int cold = clamp(atoi(argv[argOffset]), MIN_LEVEL, MAX_LEVEL);
         int warm = clamp(atoi(argv[argOffset + 1]), MIN_LEVEL, MAX_LEVEL);
+        // Safety: at least one value must be >= SAFE_LEVEL
+        if (cold < SAFE_LEVEL && warm < SAFE_LEVEL) {
+            if (cold == warm) {
+                cold = SAFE_LEVEL;
+                warm = SAFE_LEVEL;
+            } else if (cold > warm) {
+                cold = SAFE_LEVEL;
+            } else {
+                warm = SAFE_LEVEL;
+            }
+            fprintf(stderr, "[W] Safety: adjusted to cold=%d warm=%d (one must be >= %d)\n", cold, warm, SAFE_LEVEL);
+        }
         packet = buildPacket(0x21, (char)cold, (char)warm);
         sprintf(ntfText, "Set cold=%d warm=%d", cold, warm);
     }
